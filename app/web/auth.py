@@ -117,9 +117,11 @@ def install_auth(app: FastAPI) -> None:
         if request.method == "OPTIONS":  # CORS pre-flight carries no cookies anyway
             return await call_next(request)
         if not authenticate_request(request):
-            raise HTTPException(
+            from starlette.responses import JSONResponse as _JSONResponse
+
+            return _JSONResponse(
+                {"detail": "Unauthorized: log in at /api/login or provide the web token."},
                 status_code=401,
-                detail="Unauthorized: log in at /api/login or provide the web token.",
             )
         return await call_next(request)
 
