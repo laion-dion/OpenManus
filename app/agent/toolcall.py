@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from typing import Any, List, Optional, Union
 
 from pydantic import Field
@@ -186,7 +187,12 @@ class ToolCallAgent(ReActAgent):
 
             # Execute the tool
             logger.info(f"🔧 Activating tool: '{name}'...")
+            # Web UI agentic-log stream: surface the exact call (e.g. the bash
+            # script about to run) before execution so the terminal panel shows
+            # commands in real time.
+            self._publish_tool_event("tool_start", name, args)
             result = await self.available_tools.execute(name=name, tool_input=args)
+            self._publish_tool_event("tool_end", name, result=str(result))
 
             # Handle special tools
             await self._handle_special_tool(name=name, result=result)
@@ -214,6 +220,44 @@ class ToolCallAgent(ReActAgent):
             error_msg = f"⚠️ Tool '{name}' encountered a problem: {str(e)}"
             logger.exception(error_msg)
             return f"Error: {error_msg}"
+
+    def _publish_tool_event(self, kind: str, name: str, args: Any = None, result: Any = None):
+        """Push a structured tool-execution event onto the Web UI logs channel.
+
+        All string content is secret-redacted and truncated to 4000 chars
+        before publication (see :mod:`app.web.redaction`) — tool arguments and
+        results regularly echo API keys, tokens or credentials typed into a
+        bash script.
+
+        Best-effort: CLI runs (no web server loaded) silently skip this.
+        """
+        try:
+            from app.web.event_bus import event_bus
+            from app.web.redaction import redact_and_truncate
+
+            payload = {
+                "kind": kind,
+                "tool": name,
+                "agent": self.name,
+                "ts": time.strftime("%H:%M:%S"),
+            }
+            if kind == "tool_start":
+                payload["args"] = redact_and_truncate(args or {})
+                # Highlight bash-style invocations so the terminal panel can
+                # print the actual script being executed.
+                cmd = (args or {}).get("command") if isinstance(args, dict) else None
+                if isinstance(cmd, list):
+                    cmd = " && ".join(str(c) for c in cmd)
+                if cmd:
+                    payload["command"] = redact_and_truncate(str(cmd))
+            else:
+                text = str(result) if result is not None else ""
+                payload["result"] = redact_and_truncate(text)
+            event_bus.publish("logs", payload)
+        except ImportError:
+            pass
+        except Exception as exc:  # never let telemetry break the agent loop
+            logger.debug(f"Tool event publish skipped: {exc}")
 
     async def _handle_special_tool(self, name: str, result: Any, **kwargs):
         """Handle special tool execution and state changes"""

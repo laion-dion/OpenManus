@@ -26,7 +26,9 @@ from app.schema import (
     ROLE_VALUES,
     TOOL_CHOICE_TYPE,
     TOOL_CHOICE_VALUES,
+    Function,
     Message,
+    ToolCall,
     ToolChoice,
 )
 
@@ -444,6 +446,14 @@ class LLM:
                 collected_messages.append(chunk_message)
                 completion_text += chunk_message
                 print(chunk_message, end="", flush=True)
+                # Web UI: forward this token group to the active SSE stream (no-op
+                # outside of a web request). Never let a UI failure break the agent.
+                try:
+                    from app.web.streaming import publish_delta
+
+                    publish_delta(chunk_message)
+                except Exception:
+                    pass
 
             print()  # Newline after streaming
             full_response = "".join(collected_messages).strip()
@@ -634,6 +644,85 @@ class LLM:
             logger.error(f"Unexpected error in ask_with_images: {e}")
             raise
 
+    async def _ask_tool_streaming(self, params: Dict) -> Optional[ChatCompletionMessage]:
+        """Streaming variant of ask_tool used when a Web SSE stream is active.
+
+        Accumulates content + tool_call deltas into one ChatCompletionMessage
+        identical to what the non-streaming call would have returned, while
+        publishing only content deltas to the browser. Raises on any problem so
+        the caller can fall back to the classic path.
+        """
+        response = await self.client.chat.completions.create(**params)
+
+        content_parts: List[str] = []
+        partial: Dict[int, List[str]] = {}  # idx -> [id, name, arguments]
+        order: List[int] = []
+        role = "assistant"
+
+        async for chunk in response:
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            delta = choices[0].delta
+            if getattr(delta, "role", None):
+                role = delta.role
+            piece = getattr(delta, "content", None) or ""
+            if piece:
+                content_parts.append(piece)
+                # UI: forward text tokens only; tool-call plumbing stays hidden.
+                try:
+                    from app.web.streaming import publish_delta
+
+                    publish_delta(piece)
+                except Exception:
+                    pass
+            for tc in getattr(delta, "tool_calls", None) or []:
+                idx = tc.index if tc.index is not None else 0
+                slot = partial.get(idx)
+                if slot is None:
+                    slot = ["", "", ""]  # id, name, arguments
+                    partial[idx] = slot
+                    order.append(idx)
+                if getattr(tc, "id", None):
+                    partial[idx][0] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        partial[idx][1] += fn.name
+                    if getattr(fn, "arguments", None):
+                        partial[idx][2] += fn.arguments
+
+        # Estimate completion tokens from the accumulated text (usage is usually
+        # absent on streamed responses).
+        completion_text = "".join(content_parts)
+        try:
+            self.total_completion_tokens += self.count_tokens(completion_text)
+        except Exception:
+            pass
+
+        tool_calls: List[ToolCall] = []
+        for idx in sorted(order):
+            tc_id, fn_name, fn_args = partial[idx]
+            if not tc_id:
+                continue
+            # Validate assembled JSON early; malformed => force fallback.
+            json.loads(fn_args or "{}")
+            tool_calls.append(
+                ToolCall(
+                    id=tc_id,
+                    type="function",
+                    function=Function(name=fn_name, arguments=fn_args),
+                )
+            )
+
+        if not completion_text.strip() and not tool_calls:
+            raise ValueError("Empty streamed tool-call response")
+
+        kwargs: Dict[str, Any] = {"role": role, "content": completion_text or None}
+        if tool_calls:
+            kwargs["tool_calls"] = tool_calls
+        return ChatCompletionMessage.construct(**kwargs)
+
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(6),
@@ -727,6 +816,30 @@ class LLM:
                 params["temperature"] = (
                     temperature if temperature is not None else self.temperature
                 )
+
+            # Web UI token streaming: when an SSE stream is bound to this task
+            # (i.e. the agent runs inside a web chat turn), ask the API with
+            # stream=True and accumulate content + tool_call deltas into the
+            # same ChatCompletionMessage the non-streaming call would return,
+            # publishing only content deltas to the browser. Any failure falls
+            # back to the classic non-streaming path below, so CLI runs and
+            # providers without streamed tool-call support are unaffected.
+            message = None
+            try:
+                from app.web.streaming import is_stream_active
+
+                if is_stream_active():
+                    stream_params = dict(params)
+                    stream_params["stream"] = True
+                    message = await self._ask_tool_streaming(stream_params)
+            except Exception as stream_exc:
+                logger.debug(
+                    f"Streamed tool-call request failed, falling back to non-streaming: {stream_exc}"
+                )
+                message = None
+
+            if message is not None:
+                return message
 
             params["stream"] = False  # Always use non-streaming for tool requests
             response: ChatCompletion = await self.client.chat.completions.create(

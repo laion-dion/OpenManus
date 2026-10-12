@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenManus · Web Console</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- ======================= Chat column ======================= -->
+    <main id="chat-pane">
+      <header id="chat-header">
+        <div class="brand">
+          <span class="logo">◐</span>
+          <h1>OpenManus</h1>
+          <span id="conn-status" class="status status-off" title="SSE connection state">offline</span>
+        </div>
+        <button id="toggle-logs" class="ghost-btn" title="Toggle agentic logs (Ctrl+`)">
+          ▸_ Logs
+        </button>
+      </header>
+
+      <section id="login-banner" class="login-banner" hidden>
+        <form id="login-form" autocomplete="off">
+          <span id="login-msg" class="login-msg" hidden></span>
+          <label for="token-input">Access token</label>
+          <input id="token-input" type="password" placeholder="OPENMANUS_WEB_TOKEN" required />
+          <button id="login-btn" type="submit">Sign in</button>
+        </form>
+      </section>
+
+      <section id="messages" aria-live="polite">
+        <div class="msg msg-agent">
+          <div class="avatar">◐</div>
+          <div class="bubble">
+            <p>Hi — I am <strong>OpenManus</strong>. Ask me anything; replies stream in
+              token&nbsp;by&nbsp;token and you can watch every tool I run in the
+              <em>Logs</em> panel.</p>
+          </div>
+        </div>
+      </section>
+
+      <form id="composer">
+        <textarea id="prompt-input" rows="1" placeholder="Message OpenManus… (Enter to send, Shift+Enter for newline)" autocomplete="off"></textarea>
+        <button id="send-btn" type="submit" title="Send">➤</button>
+      </form>
+    </main>
+
+    <!-- ============= Retractable agentic logs terminal ============= -->
+    <aside id="logs-panel" class="collapsed" aria-hidden="true">
+      <div id="logs-titlebar">
+        <span class="term-dots"><i></i><i></i><i></i></span>
+        <span class="term-title">openmanus — agentic logs</span>
+        <span class="term-actions">
+          <button id="logs-clear" class="term-btn" title="Clear buffer">clear</button>
+          <button id="logs-autoscroll" class="term-btn active" title="Toggle autoscroll">⤓ follow</button>
+          <button id="logs-close" class="term-btn" title="Collapse panel">✕</button>
+        </span>
+      </div>
+      <pre id="logs-body" tabindex="0"></pre>
+      <div id="logs-resizer" title="Drag to resize"></div>
+    </aside>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
