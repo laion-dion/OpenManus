@@ -3,11 +3,17 @@
 The agentic logs panel in the browser subscribes to the ``logs`` SSE channel and
 renders these records terminal-style, so users can watch each tool the Python
 interpreter triggers behind the scenes (including the bash scripts being run).
+
+Everything leaving this sink is passed through :mod:`app.web.redaction`: known
+secret shapes (sk-…, github_pat_…, ghp_…, Bearer tokens, api_key/token/
+password/secret= values, AWS/Cloudflare keys, sensitive env-var values) are
+masked and long messages are truncated to 4000 chars before publication.
 """
 
 import re
 
 from app.web.event_bus import event_bus
+from app.web.redaction import MAX_FIELD_CHARS, redact, truncate
 
 # Records emitted by our own SSE pipeline must not loop back into the bus.
 _EXCLUDED_MODULE = "app.web"
@@ -16,16 +22,19 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _serialize(record) -> dict:
-    """Turn a loguru record into a compact JSON-safe dict for the SSE stream."""
+    """Turn a loguru record into a compact, redacted JSON-safe dict for the SSE stream."""
     extra = dict(record.get("extra") or {})
     # Drop non-serialisable objects (coroutines, locks, ...) coming from bind().
     clean_extra = {k: v for k, v in extra.items() if isinstance(v, (str, int, float, bool))}
+    # Scrub string extras too: bound context may carry secrets.
+    clean_extra = {k: (redact(v)[:MAX_FIELD_CHARS] if isinstance(v, str) else v) for k, v in clean_extra.items()}
 
+    message = _ANSI_RE.sub("", str(record["message"]))
     return {
         "ts": record["time"].strftime("%H:%M:%S"),
         "level": record["level"].name,
         "module": f"{record['name']}:{record['function']}:{record['line']}",
-        "message": _ANSI_RE.sub("", record["message"]),
+        "message": truncate(redact(message)),
         "extra": clean_extra,
     }
 

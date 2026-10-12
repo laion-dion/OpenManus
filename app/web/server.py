@@ -4,15 +4,32 @@ FastAPI application that:
 
 * serves the chat interface (static SPA in ``app/web/static``),
 * streams assistant replies token-by-token over Server-Sent Events,
-* streams every agentic tool execution (bash scripts included) over a second
-  SSE channel consumed by the retractable terminal-style logs panel,
-* accepts cross-origin requests from any Cloudflare Tunnel subdomain.
+* streams every agentic tool execution (bash scripts included, secrets
+  redacted) over a second SSE channel consumed by the retractable
+  terminal-style logs panel,
+* requires authentication on every /api route except /api/health
+  (shared-token login cookie or optional Cloudflare Access header).
 
-Run:  python -m app.web.server  (or: uvicorn app.web.server:app --host 0.0.0.0 --port 8000)
+Run (defaults to localhost only — safe for a local Ubuntu server):
+
+    OPENMANUS_WEB_TOKEN="$(openssl rand -hex 32)" python -m app.web.server
+
+The server REFUSES TO START without OPENMANUS_WEB_TOKEN set, and binds
+127.0.0.1 unless you explicitly pass --host / set OPENMANUS_WEB_HOST.
+To expose it through a Cloudflare Tunnel, point the tunnel at
+http://localhost:8000 (never widen the bind address) and put Cloudflare
+Access in front of the public hostname, or rely on the login token.
+
+Optional environment:
+    OPENMANUS_WEB_HOST=127.0.0.1      bind address (default, keep as-is)
+    OPENMANUS_WEB_PORT=8000           bind port
+    OPENMANUS_TRUST_CF_ACCESS=true    accept Cf-Access-Jwt-Assertion header
+    OPENMANUS_CORS_ALLOW_REGEX='^https://([a-z0-9-]+\\.)*example\\.com$'
 """
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -24,17 +41,22 @@ from pydantic import BaseModel, Field
 
 from app.config import config
 from app.logger import logger
+from app.web.auth import install_auth, require_web_token
 from app.web.cors import install_cors
 from app.web.event_bus import event_bus
 from app.web.log_sink import install_log_sink
+from app.web.redaction import redact_and_truncate
 from app.web.streaming import activate
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="OpenManus Web UI", version="0.2.0")
+app = FastAPI(title="OpenManus Web UI", version="0.3.0")
 
-# CORS must tolerate arbitrary *.subdomain hosts mapped through cloudflared.
+# CORS: strict by default (localhost origins only); see app/web/cors.py.
 install_cors(app)
+
+# Auth gate: all /api/* except /api/health (+ /api/login) need the session cookie.
+install_auth(app)
 
 
 class ChatRequest(BaseModel):
@@ -83,9 +105,13 @@ def _sse(event: dict) -> str:
 
 @app.on_event("startup")
 async def _startup():
+    # Fail hard and early: no web token -> no server. (Also enforced per-request
+    # by the auth gate; this makes misconfiguration obvious at boot.)
+    require_web_token()
     event_bus.bind_loop(asyncio.get_running_loop())
     # Mirror all loguru records (tool activations, bash output, errors...) into
-    # the "logs" channel so the browser terminal shows them live.
+    # the "logs" channel so the browser terminal shows them live. Records are
+    # secret-redacted + truncated inside the sink (app/web/log_sink.py).
     install_log_sink("logs")
     logger.info("OpenManus Web UI ready — SSE channels: /api/stream/chat, /api/stream/logs")
 
@@ -116,8 +142,10 @@ async def chat(request: Request, body: ChatRequest):
             try:
                 agent = await session.get_agent()
                 result = await agent.run(prompt)
+                # The final result can echo secrets (tool output, config dumps);
+                # redact + truncate before it reaches the browser.
                 event_bus.publish(
-                    "chat", {"type": "turn_result", "result": str(result or "")}
+                    "chat", {"type": "turn_result", "result": redact_and_truncate(str(result or ""))}
                 )
             except asyncio.CancelledError:
                 stream.finish()
@@ -202,7 +230,12 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 def main():
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Default bind: loopback only. This app can execute bash through the
+    # agent's tools, so it must never listen on 0.0.0.0 by default; expose it
+    # via a Cloudflare Tunnel pointing at http://localhost:8000 instead.
+    host = os.getenv("OPENMANUS_WEB_HOST", "127.0.0.1")
+    port = int(os.getenv("OPENMANUS_WEB_PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

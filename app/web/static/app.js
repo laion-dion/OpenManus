@@ -129,12 +129,64 @@
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, session_id: sessionId }),
       });
+      if (res.status === 401) { showLogin("Session expired — sign in again."); throw new Error("Unauthorized"); }
       if (!res.ok) throw new Error(await res.text());
     } catch (err) {
       addMessage("agent", "⚠ Failed to reach the agent server: " + err.message);
+    }
+  });
+
+  // ---------------------------- LOGIN GATE ------------------------------
+  // All /api routes (except /api/health) require the HttpOnly session cookie
+  // issued by POST /api/login. SSE streams answer 401 when logged out, so we
+  // surface the login banner and retry the streams after a successful sign-in.
+  const loginBanner = $("#login-banner");
+  const loginForm = $("#login-form");
+  const loginMsg = $("#login-msg");
+  const tokenInput = $("#token-input");
+
+  let authed = true;
+
+  function showLogin(message) {
+    authed = false;
+    loginBanner.hidden = false;
+    if (message) { loginMsg.textContent = message; loginMsg.hidden = false; }
+    tokenInput.focus();
+  }
+
+  function hideLogin() {
+    authed = true;
+    loginBanner.hidden = true;
+    loginMsg.hidden = true;
+    tokenInput.value = "";
+  }
+
+  loginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const token = tokenInput.value.trim();
+    if (!token) return;
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        showLogin(body.detail || "Invalid token.");
+        return;
+      }
+      hideLogin();
+      // Re-open the SSE feeds now that the cookie is set.
+      connectChatStream();
+      connectLogsStream();
+    } catch (err) {
+      showLogin("Cannot reach the server: " + err.message);
     }
   });
 
@@ -142,9 +194,21 @@
   function connectChatStream() {
     const es = new EventSource("/api/stream/chat");
     es.onopen = () => setStatus(true);
-    es.onerror = () => {
+    es.onerror = async () => {
       setStatus(false);
       es.close();
+      // EventSource hides the HTTP status; probe health+auth state cheaply.
+      let unauthorized = false;
+      try {
+        const probe = await fetch("/api/chat", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: "\u0000probe", session_id: sessionId }),
+        });
+        unauthorized = probe.status === 401;
+      } catch { /* offline: just retry below */ }
+      if (unauthorized) { showLogin("Sign in to stream agent replies."); return; }
       setTimeout(connectChatStream, 2000); // auto-reconnect
     };
     es.onmessage = (ev) => {

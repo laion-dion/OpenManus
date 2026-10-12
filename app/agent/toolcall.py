@@ -224,10 +224,16 @@ class ToolCallAgent(ReActAgent):
     def _publish_tool_event(self, kind: str, name: str, args: Any = None, result: Any = None):
         """Push a structured tool-execution event onto the Web UI logs channel.
 
+        All string content is secret-redacted and truncated to 4000 chars
+        before publication (see :mod:`app.web.redaction`) — tool arguments and
+        results regularly echo API keys, tokens or credentials typed into a
+        bash script.
+
         Best-effort: CLI runs (no web server loaded) silently skip this.
         """
         try:
             from app.web.event_bus import event_bus
+            from app.web.redaction import redact_and_truncate
 
             payload = {
                 "kind": kind,
@@ -236,17 +242,17 @@ class ToolCallAgent(ReActAgent):
                 "ts": time.strftime("%H:%M:%S"),
             }
             if kind == "tool_start":
-                payload["args"] = args or {}
+                payload["args"] = redact_and_truncate(args or {})
                 # Highlight bash-style invocations so the terminal panel can
                 # print the actual script being executed.
                 cmd = (args or {}).get("command") if isinstance(args, dict) else None
                 if isinstance(cmd, list):
                     cmd = " && ".join(str(c) for c in cmd)
                 if cmd:
-                    payload["command"] = cmd
+                    payload["command"] = redact_and_truncate(str(cmd))
             else:
                 text = str(result) if result is not None else ""
-                payload["result"] = text[:4000]
+                payload["result"] = redact_and_truncate(text)
             event_bus.publish("logs", payload)
         except ImportError:
             pass

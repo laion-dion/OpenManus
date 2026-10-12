@@ -21,6 +21,15 @@
         </button>
       </header>
 
+      <section id="login-banner" class="login-banner" hidden>
+        <form id="login-form" autocomplete="off">
+          <span id="login-msg" class="login-msg" hidden></span>
+          <label for="token-input">Access token</label>
+          <input id="token-input" type="password" placeholder="OPENMANUS_WEB_TOKEN" required />
+          <button id="login-btn" type="submit">Sign in</button>
+        </form>
+      </section>
+
       <section id="messages" aria-live="polite">
         <div class="msg msg-agent">
           <div class="avatar">◐</div>

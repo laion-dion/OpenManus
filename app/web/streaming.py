@@ -58,10 +58,20 @@ def activate() -> TokenStream:
 
 
 def publish_delta(text: str) -> None:
-    """Called from app.llm.LLM.ask: forward a chunk to the active stream, if any."""
+    """Called from app.llm streaming paths: forward a chunk to the active stream, if any."""
     stream = current_stream.get()
     if stream is not None:
         stream.emit(text)
 
 
-__all__ = ["TokenStream", "current_stream", "activate", "publish_delta"]
+def is_stream_active() -> bool:
+    """True when a Web SSE TokenStream is bound to the current task context.
+
+    Used by ``LLM.ask_tool`` to decide whether to switch the tool-call request
+    to streaming mode (CLI runs keep the classic non-streaming path).
+    """
+    stream = current_stream.get()
+    return stream is not None and not stream.done
+
+
+__all__ = ["TokenStream", "current_stream", "activate", "publish_delta", "is_stream_active"]

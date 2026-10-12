@@ -64,6 +64,31 @@ html, body {
 .ghost-btn:hover { color: var(--text); border-color: var(--accent); }
 .ghost-btn.active { color: var(--accent); border-color: var(--accent); }
 
+/* ---------- Login banner (token gate) ---------- */
+.login-banner {
+  padding: 10px 16px;
+  border-bottom: 1px solid #2b3547;
+  background: rgba(255, 255, 255, 0.03);
+}
+.login-banner[hidden] { display: none; }
+.login-banner form {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.login-banner label { font-size: 13px; color: var(--text-dim); }
+.login-banner input[type="password"] {
+  flex: 1 1 220px; min-width: 180px;
+  background: #0d1117; color: var(--text);
+  border: 1px solid #2b3547; border-radius: 8px;
+  padding: 8px 10px; font-family: var(--mono); font-size: 13px;
+}
+.login-banner input[type="password"]:focus { outline: none; border-color: var(--accent); }
+.login-banner button {
+  background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+  padding: 8px 16px; cursor: pointer; font-size: 13px;
+}
+.login-banner button:hover { filter: brightness(1.15); }
+.login-msg { font-size: 13px; color: var(--err); width: 100%; }
+
 #messages {
   flex: 1; overflow-y: auto; padding: 24px 20px 12px;
   display: flex; flex-direction: column; gap: 16px;
