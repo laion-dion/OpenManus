@@ -444,6 +444,14 @@ class LLM:
                 collected_messages.append(chunk_message)
                 completion_text += chunk_message
                 print(chunk_message, end="", flush=True)
+                # Web UI: forward this token group to the active SSE stream (no-op
+                # outside of a web request). Never let a UI failure break the agent.
+                try:
+                    from app.web.streaming import publish_delta
+
+                    publish_delta(chunk_message)
+                except Exception:
+                    pass
 
             print()  # Newline after streaming
             full_response = "".join(collected_messages).strip()
